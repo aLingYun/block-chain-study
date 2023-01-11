@@ -1,6 +1,7 @@
 use rand::prelude::*;
 use sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crypto::ed25519::{keypair, signature, verify};
 
 fn get_answer(difficult: u8) -> String {
     let mut answer = "".to_string();
@@ -16,9 +17,40 @@ fn get_time_stamp() -> i64 {
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
-    let ms = since_the_epoch.as_secs() as i64 * 1000i64
-        + (since_the_epoch.subsec_nanos() as f64 / 1_000_000.0) as i64;
-    ms
+    let ns = since_the_epoch.as_secs() as i64 * 1_000_000_000_i64
+        + (since_the_epoch.subsec_nanos() as f64) as i64;
+    ns
+}
+
+fn u8_to_string(array: &[u8]) -> String {
+    let mut s = "".to_string();
+    for i in array {
+        let tmp = format!("{:02X}", i);
+        s.push_str(&tmp[..]);
+    }
+    s
+}
+
+fn string_to_u8(ss: &String) -> [u8; 64] {
+    let mut array_u8 = [0; 64];
+    let mut i = 0_usize;
+    for iter in ss.bytes() {
+        if iter < 65 {
+            if i % 2 == 0 {
+                array_u8[i/2] = (iter - 48) * 16;
+            } else {
+                array_u8[i/2] += iter - 48;
+            }
+        } else {
+            if i % 2 == 0 {
+                array_u8[i/2] = (iter - 55) * 16;
+            } else {
+                array_u8[i/2] += iter - 55;
+            }
+        }
+        i += 1;
+    }
+    array_u8
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +58,7 @@ struct Transaction {
     from: String,
     to: String,
     amount: u32,
+    signature: String,
 }
 
 impl Transaction {
@@ -34,7 +67,25 @@ impl Transaction {
             from: from_arg,
             to: to_arg,
             amount: amount_arg,
+            signature: "".to_string(),
         }
+    }
+
+    fn sign(&mut self, private_key: &[u8]) {
+        self.signature = u8_to_string(&signature(sha256::digest(self.to_string()).as_bytes(), private_key));
+    }
+
+    fn is_valid_transaction(&self) -> bool {
+        if self.from == "".to_string() && self.to != "".to_string() {
+            return true;
+        }
+        if self.signature == "".to_string() {
+            return false;
+        }
+        //println!("is valid: {:?}", &string_to_u8(&self.from));
+        return verify(sha256::digest(self.to_string()).as_bytes(), 
+                      &string_to_u8(&self.from)[0..32], 
+                      &string_to_u8(&self.signature));
     }
 }
 
@@ -93,6 +144,16 @@ impl Block {
             sys_time.elapsed().unwrap().as_micros()
         );
     }
+
+    fn all_transaction_is_valid(&self) -> bool {
+        for iter in &self.data {
+            if !iter.is_valid_transaction() {
+                println!("This is invalid transaction");
+                return false;
+            }
+        }
+        true
+    }
 }
 
 // Chain 定义
@@ -116,12 +177,21 @@ impl Chain {
             chain: vec![blk],
             transaction_pool: vec![],
             miner_reward: 50_u8,
-            diffculty: 3_u8,
+            diffculty: 4_u8,
         }
     }
 
     fn add_transaction(&mut self, tran: Transaction) {
-        self.transaction_pool.push(tran);
+        if tran.from == "".to_string() || tran.to == "".to_string() {
+            println!("Invalid from or to!");
+            return;
+        }
+
+        if tran.is_valid_transaction() {
+            self.transaction_pool.push(tran);
+        } else {
+            println!("Invalid Transaction!");
+        }
     }
 
     fn mine_transaction_pool(&mut self, miner: String) {
@@ -130,7 +200,9 @@ impl Chain {
             miner,
             self.miner_reward as u32,
         );
-        self.add_transaction(tran);
+        if tran.is_valid_transaction() {
+            self.transaction_pool.push(tran);
+        }
 
         let blk = Block::new(self.transaction_pool.clone());
         self.add_block(blk);
@@ -155,6 +227,12 @@ impl Chain {
         }
         for iter in 1..self.chain.len() {
             let blk_tmp = &self.chain[iter];
+
+            if !blk_tmp.all_transaction_is_valid() {
+                println!("This is a valid block!");
+                return false;
+            }
+
             if blk_tmp.hash != sha256::digest(blk_tmp.to_string_for_hash())
             {
                 println!("数据被篡改");
@@ -170,48 +248,46 @@ impl Chain {
     }
 }
 
-// fn proof_of_work(difficult: usize) {
-//     let data = "Hello".to_string();
-//     let mut x = 1;
-//     loop {
-//         let mut s = data.clone();
-//         s.push_str(&x.to_string());
-//         let result = sha256::digest(s.clone());
-//         if &(result[0..difficult]) != "00000" {
-//             x += 1;
-//         } else {
-//             println!("{}", result);
-//             println!("{}", x);
-//             break;
-//         }
-//     }
-// }
-
 fn main() {
+
+    let seed_string = b"qwertyuiopasdfghjklzxcvbnm012345";  
+    let (private_key_s, public_key_s) = keypair(seed_string);
+    // println!("public key = {:?}", u8_to_string(&public_key_s));
+    // println!("private key = {:?}", u8_to_string(&private_key_s));
+
+    let seed_string = b"012345qwertyuiopasdfghjklzxcvbnm";  
+    let (_private_key_r, public_key_r) = keypair(seed_string);
+    // println!("public key = {:?}", u8_to_string(&public_key_r));
+    // println!("private key = {:?}", u8_to_string(&private_key_r));
+
     let mut chain = Chain::new();
 
-    let tran1 = Transaction::new("addr1".to_string(),
-        "addr2".to_string(), 10_u32);
-    let tran2 = Transaction::new("addr2".to_string(),
-        "addr3".to_string(), 10_u32);
-    let tran3 = Transaction::new("addr3".to_string(),
-        "addr1".to_string(), 10_u32);
+    let mut tran1 = Transaction::new(
+        u8_to_string(&public_key_s),
+        u8_to_string(&public_key_r), 
+        10_u32
+    );
+    let mut tran2 = Transaction::new(
+        u8_to_string(&public_key_s),
+        u8_to_string(&public_key_r), 
+        20_u32
+    );
+    let mut tran3 = Transaction::new(
+        u8_to_string(&public_key_s),
+        u8_to_string(&public_key_r),  
+        30_u32
+    );
+    tran1.sign(&private_key_s);
+    tran2.sign(&private_key_s);
+    tran3.sign(&private_key_s);
+    // println!("{}", tran1.is_valid_transaction());
+    // println!("{}", tran2.is_valid_transaction());
+    // println!("{}", tran3.is_valid_transaction());
     chain.add_transaction(tran1);
     chain.add_transaction(tran2);
     chain.add_transaction(tran3);
     chain.mine_transaction_pool("miner1".to_string());
 
-    let tran4 = Transaction::new("XiaoMing".to_string(),
-        "XiaoHong".to_string(), 10_u32);
-    let tran5 = Transaction::new("XiaoHong".to_string(),
-        "XiaoGang".to_string(), 10_u32);
-    let tran6 = Transaction::new("XiaoGang".to_string(),
-        "XiaoMing".to_string(), 10_u32);
-    chain.add_transaction(tran4);
-    chain.add_transaction(tran5);
-    chain.add_transaction(tran6);
-    chain.mine_transaction_pool("miner1".to_string());
-
     println!("{:#?}", chain);
-    println!("{}", chain.is_valid_chain());
+    println!("A whole chain is valid: {}", chain.is_valid_chain());
 }
