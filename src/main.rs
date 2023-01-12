@@ -250,7 +250,7 @@ impl Chain {
             let blk_tmp = &self.chain[iter];
             // Block 中所有 transaction 的有效性
             if !blk_tmp.all_transaction_is_valid() {
-                println!("This is a valid block!");
+                println!("This is a invalid block!");
                 return false;
             }
             // Block 整体数据的有效性
@@ -313,6 +313,9 @@ fn main() {
     chain.add_transaction(tran3);
     // 挖整个 transaction pool
     chain.mine_transaction_pool("miner1".to_string());
+
+    // 篡改区块中的数据
+    //chain.chain[1].data[1].amount = 1;
 
     println!("{:#?}", chain);
     println!("A whole chain is valid: {}", chain.is_valid_chain());
